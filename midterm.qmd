@@ -172,6 +172,8 @@ plt.show()
 
 The histogram shows that most countries fall within a broad range between approximately 60 and 80 years, though some countries exhibit considerably lower values. A time series of the global average life expectancy shows a generally increasing trend from 2000 to 2020, with a dip at 2020 likely due to Covid. Comparisons across income groups show that high-income countries consistently achieve higher life expectancy, while low-income countries tend to have lower values. Regional comparisons similarly highlight disparities, with Sub-Saharan Africa exhibiting significantly lower average life expectancy than other regions. The scatter plots suggest several potentially meaningful relationships between life expectancy and the selected variables. Countries with higher GDP per capita, a larger share of the population aged 65 and above, and higher secondary school enrollment rates tend to have higher life expectancy, indicating positive correlations between these variables and overall population health. In contrast, PM2.5 air pollution and fertility rate show negative relationships with life expectancy, countries with higher pollution levels or higher fertility rates generally have lower life expectancy. Health expenditure as a percentage of GDP does not appear to show a clear relationship with life expectancy in the scatter plots, suggesting little to no correlation.
 
+## Summary
+
 ```{python}
 X = df_clean[[
     "gdp_per_capita",
@@ -188,9 +190,6 @@ model = sm.OLS(y, X_const).fit()
 model.summary()
 ```
 
-A simple OLS regression model shows several significant relationships between life expectancy and the selected variables. GDP per capita, the share of the population aged 65 and above, and secondary school enrollment are all positively associated with life expectancy. Fertility rate shows a very strong negative correlation. Health expenditure as a percentage of GDP has a small positive association. PM2.5 pollution also has a positive coefficient in the regression, which differs from common sense and the negative pattern observed in the scatter plots. All the coefficients of the predictors have a p-value lower than 0.05, suggesting statistical significance.
-
-## Summary
-The exploratory analysis suggests that our chosen list of indicators are associated with differences in life expectancy across countries, as mentioned in the preliminary results part above.
+The exploratory analysis suggests that our chosen list of indicators are associated with differences in life expectancy across countries, as mentioned in the preliminary results part above. A simple OLS regression model shows several significant relationships between life expectancy and the selected variables. GDP per capita, the share of the population aged 65 and above, and secondary school enrollment are all positively associated with life expectancy. Fertility rate shows a very strong negative correlation. Health expenditure as a percentage of GDP has a small positive association. PM2.5 pollution also has a positive coefficient in the regression, which differs from common sense and the negative pattern observed in the scatter plots. All the coefficients of the predictors have a p-value lower than 0.05, suggesting statistical significance.
 
 For the final project, several ML models will be explored to predict life expectancy based on the selected indicators, including linear regression models, GAMs and random forests. Model performance will be evaluated using CV methods. The results will be presented through interactive visualizations on our deployed website.
