@@ -1,0 +1,196 @@
+---
+title: "Midterm Project"
+format:
+  html:
+    embed-resources: true
+jupyter: python3
+---
+```{python}
+#| label: setup
+#| message: false
+#| warning: false
+import pandas as pd
+import numpy as np
+import requests
+import seaborn as sns
+import matplotlib.pyplot as plt
+import statsmodels.api as sm
+import json
+import time
+import warnings
+warnings.filterwarnings('ignore')
+```
+
+# Link to Github Repo: https://github.com/Albert-syk/JSC370-Project
+
+## Introduction
+Life expectancy is widely used as a summary measure of population health and overall social development, and understanding the factors associated with life expectancy can help provide insight into global differences in living conditions. In this project, we analyze global data from 2000 to 2020 to explore how life expectancy varies across countries and how it relates to several socioeconomic, demographic, and environmental indicators. The variables used in our analysis include: GDP per capita, health expenditure, population aged 65 and older, secondary school enrollment rates, PM2.5 air pollution levels and fertility rates. In addition, country-level categorical information such as region and income group is also included to examine patterns of certain groups.
+
+## Methods and Preliminary Results
+The data used in this analysis is from the World Bank World Development Indicators through the World Bank API. For each selected indicator, we fetch observations for all countries between 2000 and 2020 using API requests, and then merged into a single dataset based on country and year. Additional country metadata is merged with the indicator dataset using ISO2 country codes.
+
+```{python}
+variables = {
+    "life_expectancy": "SP.DYN.LE00.IN",
+    "gdp_per_capita": "NY.GDP.PCAP.CD",
+    "health_expenditure": "SH.XPD.CHEX.GD.ZS",
+    "pop_65plus": "SP.POP.65UP.TO.ZS",
+    "school_enrollment": "SE.SEC.ENRR",
+    "pm25_pollution": "EN.ATM.PM25.MC.M3",
+    "fertility_rate": "SP.DYN.TFRT.IN"
+}
+
+def fetch_indicator(name, code, start_year=2000, end_year=2020):
+    url = f"https://api.worldbank.org/v2/country/all/indicator/{code}?format=json&date={start_year}:{end_year}&per_page=20000"
+    response = requests.get(url)
+    if response.status_code != 200:
+        print(f"Error fetcing data for {name}")
+        return pd.DataFrame()
+    data = response.json()
+    if len(data) < 2:
+        return pd.DataFrame()
+    df = pd.DataFrame(data[1])
+    df = df[["country", "date", "value"]]
+    df.columns = ["Country", "Year", name]
+    df["Year"] = df["Year"].astype(int)
+    df["Country"] = df["Country"].str["id"]
+    return df
+
+dfs = []
+for name, code in variables.items():
+    df = fetch_indicator(name, code)
+    if not df.empty:
+        print(f"Fetched data for {name}")
+        dfs.append(df)
+    time.sleep(0.1)
+
+merged = dfs[0]
+for df in dfs[1:]:
+    merged = merged.merge(df, how="outer", on=["Country", "Year"])
+```
+```{python}
+country_url = "https://api.worldbank.org/v2/country?format=json&per_page=500"
+data = requests.get(country_url).json()
+
+countries = []
+for country in data[1]:
+    countries.append({
+        "Country": country["iso2Code"],
+        "Region": country["region"]["value"],
+        "IncomeGroup": country["incomeLevel"]["value"]
+    })
+
+country_df = pd.DataFrame(countries)
+merged = merged.merge(country_df, how="left", on="Country")
+```
+
+After merging the datasets, we first remove missing values to ensure consistency. Aggregate entries representing groups of countries or regions are also excluded so that the analysis focuses only on individual countries. After examining the summary statistics, observations with unrealistically low life expectancy values, in this case life expectancy under 40 years, are removed.
+
+```{python}
+merged.dropna(inplace=True)
+df_clean = merged.loc[(merged["life_expectancy"] >= 40) & (merged["Region"] != "Aggregates") & (merged["IncomeGroup"] != "Aggregates") & (merged["IncomeGroup"] != "Not classified")]
+df_clean["Region"].loc[(df_clean["Region"] == "Middle East, North Africa, Afghanistan & Pakistan")] = "Middle East & North Africa"
+df_clean.to_csv("life_expectancy_data.csv", index=False)
+
+summary = df_clean.select_dtypes(include="number").agg(
+    ["count", "mean", "std", "min", "median", "max"]
+)
+summary
+```
+
+Exploratory data analysis was conducted by generating summary statistics and a set of visualizations. These include histograms to show the distribution of life expectancy, time series plots to discover global trends over time, scatter plots to explore relationships between life expectancy and each numerical variable, and violin plots to compare life expectancy across regions and income groups.
+
+```{python}
+sns.histplot(df_clean["life_expectancy"])
+plt.xlabel("Life Expectancy")
+plt.title("Distribution of Life Expectancy Across Countries")
+plt.show()
+```
+```{python}
+df_clean.groupby("Year")["life_expectancy"].mean().plot()
+plt.xticks(ticks=[2000, 2005, 2010, 2015, 2020])
+plt.ylabel("Average Life Expectancy")
+plt.title("Global Average Life Expectancy Trend")
+plt.show()
+```
+```{python}
+sns.violinplot(data=df_clean, y="IncomeGroup", x="life_expectancy")
+plt.ylabel("Income Group")
+plt.xlabel("Life Expectancy")
+plt.title("Life Expectancy by Income Group")
+plt.show()
+```
+```{python}
+sns.violinplot(data=df_clean, y="Region", x="life_expectancy")
+plt.ylabel("Region")
+plt.xlabel("Life Expectancy")
+plt.title("Life Expectancy by Region")
+plt.show()
+```
+```{python}
+sns.scatterplot(data=df_clean, x="gdp_per_capita", y="life_expectancy")
+plt.xlabel("GDP per Capita")
+plt.ylabel("Life Expectancy")
+plt.title("GDP per Capita vs Life Expectancy")
+plt.show()
+```
+```{python}
+sns.scatterplot(data=df_clean, x="health_expenditure", y="life_expectancy")
+plt.xlabel("Health Expenditure Percentage")
+plt.ylabel("Life Expectancy")
+plt.title("Percentage of GDP Spent on Health Expenditure vs Life Expectancy")
+plt.show()
+```
+```{python}
+sns.scatterplot(data=df_clean, x="pop_65plus", y="life_expectancy")
+plt.xlabel("Elderly Population Percentage")
+plt.ylabel("Life Expectancy")
+plt.title("Percentage of Population over 65 vs Life Expectancy")
+plt.show()
+```
+```{python}
+sns.scatterplot(data=df_clean, x="school_enrollment", y="life_expectancy")
+plt.xlabel("School Enrollment Percentage")
+plt.ylabel("Life Expectancy")
+plt.title("Percentage of Eligible Population Enrolled in Secondary School vs Life Expectancy")
+plt.show()
+```
+```{python}
+sns.scatterplot(data=df_clean, x="pm25_pollution", y="life_expectancy")
+plt.xlabel("Average PM2.5 Concentration")
+plt.ylabel("Life Expectancy")
+plt.title("Average PM2.5 Concentration vs Life Expectancy")
+plt.show()
+```
+```{python}
+sns.scatterplot(data=df_clean, x="fertility_rate", y="life_expectancy")
+plt.xlabel("Fertility Rate")
+plt.ylabel("Life Expectancy")
+plt.title("Fertility Rate vs Life Expectancy")
+plt.show()
+```
+
+The histogram shows that most countries fall within a broad range between approximately 60 and 80 years, though some countries exhibit considerably lower values. A time series of the global average life expectancy shows a generally increasing trend from 2000 to 2020, with a dip at 2020 likely due to Covid. Comparisons across income groups show that high-income countries consistently achieve higher life expectancy, while low-income countries tend to have lower values. Regional comparisons similarly highlight disparities, with Sub-Saharan Africa exhibiting significantly lower average life expectancy than other regions. The scatter plots suggest several potentially meaningful relationships between life expectancy and the selected variables. Countries with higher GDP per capita, a larger share of the population aged 65 and above, and higher secondary school enrollment rates tend to have higher life expectancy, indicating positive correlations between these variables and overall population health. In contrast, PM2.5 air pollution and fertility rate show negative relationships with life expectancy, countries with higher pollution levels or higher fertility rates generally have lower life expectancy. Health expenditure as a percentage of GDP does not appear to show a clear relationship with life expectancy in the scatter plots, suggesting little to no correlation.
+
+```{python}
+X = df_clean[[
+    "gdp_per_capita",
+    "pop_65plus",
+    "school_enrollment",
+    "pm25_pollution",
+    "fertility_rate",
+    "health_expenditure"
+]]
+y = df_clean["life_expectancy"]
+X_const = sm.add_constant(X)
+
+model = sm.OLS(y, X_const).fit()
+model.summary()
+```
+
+A simple OLS regression model shows several significant relationships between life expectancy and the selected variables. GDP per capita, the share of the population aged 65 and above, and secondary school enrollment are all positively associated with life expectancy. Fertility rate shows a very strong negative correlation. Health expenditure as a percentage of GDP has a small positive association. PM2.5 pollution also has a positive coefficient in the regression, which differs from common sense and the negative pattern observed in the scatter plots. All the coefficients of the predictors have a p-value lower than 0.05, suggesting statistical significance.
+
+## Summary
+The exploratory analysis suggests that our chosen list of indicators are associated with differences in life expectancy across countries, as mentioned in the preliminary results part above.
+
+For the final project, several ML models will be explored to predict life expectancy based on the selected indicators, including linear regression models, GAMs and random forests. Model performance will be evaluated using CV methods. The results will be presented through interactive visualizations on our deployed website.
