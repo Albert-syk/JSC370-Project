@@ -1,0 +1,484 @@
+---
+title: "JSC370 Final Project"
+format:
+  html:
+    embed-resources: true
+jupyter: python3
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Introduction
+
+Life expectancy is widely used as a summary measure of population health and overall social development, and understanding the factors associated with life expectancy can help provide insight into global differences in living conditions. In this project, we analyze global data from 2000 to 2020 to explore how life expectancy varies across countries and how it relates to several socioeconomic, demographic, and environmental indicators. Understanding these patterns is useful for identifying which factors appear most strongly associated with longer lives.
+
+### The World Bank and Global Development Data
+
+TThe data used in this analysis is from the World Bank World Development Indicators through the World Bank API, from 2000 to 2020. The World Bank WDI database is a well-known source for global development statistics, providing standardized data that allows for rigorous studies.
+
+### Research Question
+
+Which socioeconomic, demographic, and environmental indicators serve as the most significant determinants of life expectancy, and to what extent do these factors vary in influence across different global regions and income groups?
+
+### Objectives
+
+Building on the midterm analysis, the final project shifts to a predictive modelling task. The central objective is to determine whether these socioeconomic, demographic, and environmental variables can accurately predict life expectancy across countries and years, and which predictors are most influential once modeled jointly.
+
+To ensure numerical stability and model interpretability, the models will use the following factors as tentative predictors:
+- Economic: GDP per capita.
+- Health: Health expenditure.
+- Demographic: Fertility rates and population age 65+.
+- Education: Secondary school enrollment.
+- Environmental: PM2.5 pollution.
+- Contextual: Geographic region and income group.
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+import pycountry
+from plotly.subplots import make_subplots
+from pathlib import Path
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.inspection import permutation_importance, PartialDependenceDisplay
+from xgboost import XGBRegressor
+from pygam import LinearGAM, s
+import statsmodels.api as sm
+```
+
+# Methods
+
+## Data Ingestion
+
+### Load Data
+
+The original raw data were acquired from the World Bank API, they were cleaned and merged at the country year level during the midterm project. This final report starts from that cleaned export. Alternatively, run the code chunks in the midterm report to get the same dataset.
+
+```{python}
+df = pd.read_csv("data/life_expectancy_data.csv", keep_default_na=False) # pd recognize region code NA as missing, this is a fix
+```
+
+### Data Summary
+
+A brief summary of the dataset we are using:
+
+```{python}
+data_summary_tbl = pd.DataFrame({
+    "Statistic": ["Rows", "Columns"],
+    "Value": [df.shape[0], df.shape[1]]
+})
+
+dtype_summary_tbl = (
+    df.dtypes.rename("Data Type")
+    .astype(str)
+    .reset_index()
+    .rename(columns={"index": "Variable"})
+)
+
+data_summary_tbl
+```
+
+Table 1. Dataset summary.
+
+```{python}
+dtype_summary_tbl
+```
+
+Table 2. Variable data types.
+
+For exploration, we used table summaries and variable type checks to confirm coverage and structure before modeling. More detailed EDA results including plots can be found in the midterm report.
+
+From the summary, the cleaned dataset has 2,851 rows and 11 columns. The data types are appropriate for modeling: 7 continuous numeric predictors as floats, 1 time variable as integers, and 3 categorical variables.
+
+## Interactive Visualizations
+
+### Interactive Plot 1
+
+Figure 1 is an interactive map of average life expectancy in 2020 by country. Countries with missing values in data are omitted.
+
+```{python}
+viz_2020 = df[df["Year"] == 2020].copy()
+map_df = (
+    viz_2020.groupby(["Country", "Region", "IncomeGroup"], as_index=False)["life_expectancy"]
+    .mean()
+)
+
+# I regret not using iso3 when fetching data
+def iso2_to_iso3(code):
+    c = pycountry.countries.get(alpha_2=str(code))
+    return c.alpha_3 if c else None
+
+map_df["iso3"] = map_df["Country"].apply(iso2_to_iso3)
+map_df = map_df.dropna(subset=["iso3"])
+
+map_df["hover"] = (
+    "Country code: " + map_df["Country"].astype(str) + "<br>" +
+    "Life expectancy: " + map_df["life_expectancy"].round(2).astype(str) + "<br>" +
+    "Region: " + map_df["Region"].astype(str) + "<br>" +
+    "Income group: " + map_df["IncomeGroup"].astype(str)
+)
+
+fig_map = go.Figure(go.Choropleth(
+    locations=map_df["iso3"],
+    z=map_df["life_expectancy"],
+    locationmode="ISO-3",
+    text=map_df["hover"],
+    hoverinfo="text",
+    colorscale="Viridis",
+    colorbar_title="Life Expectancy",
+))
+
+fig_map.update_layout(
+    title="Figure 1. Life Expectancy by Country (2020)",
+    geo=dict(showframe=False, showcoastlines=True, projection_type="equirectangular"),
+    height=500,
+)
+
+fig_map.show()
+```
+
+### Interactive Plot 2
+
+Figure 2 is an interactive histogram of life expectancy grouped by income group.
+
+```{python}
+fig_hist = px.histogram(
+    df,
+    x="life_expectancy",
+    color="IncomeGroup",
+    nbins=30,
+    opacity=0.6,
+    title="Figure 2. Distribution of Life Expectancy by Income Group",
+)
+fig_hist.update_layout(
+    barmode="overlay",
+    xaxis_title="Life Expectancy",
+    yaxis_title="Count",
+    legend_title_text="Income Group"
+)
+fig_hist.show()
+```
+
+### Interactive Plot 3
+
+Figure 3 is an interactive scatterplot of life expectancy against GDP per capita in 2020.
+
+```{python}
+fig_scatter = px.scatter(
+    viz_2020,
+    x="gdp_per_capita",
+    y="life_expectancy",
+    color="IncomeGroup",
+    hover_data=["Country", "Region"],
+    opacity=0.6,
+    title="Figure 3. Life Expectancy vs GDP per Capita (2020)",
+)
+fig_scatter.update_layout(
+    xaxis_title="GDP per Capita",
+    yaxis_title="Life Expectancy",
+    legend_title_text="Income Group"
+)
+fig_scatter.show()
+```
+
+## Data Preprocessing
+
+### Feature Engineering
+
+These engineered features were chosen to improve model stability and interpretability while preserving interpretability.
+
+- `log_gdp_per_capita`: We use the natural log of GDP per capita to reduce right-skew and limit the influence of very high-income outliers. This usually makes the relationship with life expectancy smoother and easier to model.
+- `absolute_health_spending`: We convert health expenditure from a percentage into an absolute value per capita. This gives a more interpretable healthcare spending measure across countries with very different income levels.
+- `year_norm`: We subtract 2000 from the year values to improve numerical stability and interpretation, especially in regression models where raw year values are too large.
+- `income_group_ord`: We manually encode income group as an ordinal variable to preserve the rank structure.
+- `region`: We use one-hot encoding on region, so no artificial ranking is imposed on regions.
+
+```{python}
+model_df = df.copy()
+
+model_df["log_gdp_per_capita"] = np.log(model_df["gdp_per_capita"])
+model_df["absolute_health_spending"] = model_df["gdp_per_capita"] * model_df["health_expenditure"] / 100
+model_df["year_norm"] = model_df["Year"] - 2000
+model_df["IncomeGroup"] = model_df["IncomeGroup"].str.strip()
+model_df["Region"] = model_df["Region"].str.strip()
+
+income_map = {
+    "Low income": 1,
+    "Lower middle income": 2,
+    "Upper middle income": 3,
+    "High income": 4,
+}
+model_df["income_group_ord"] = model_df["IncomeGroup"].map(income_map)
+
+region_dummies = pd.get_dummies(model_df["Region"], prefix="region", dtype=int)
+model_df = pd.concat([model_df, region_dummies], axis=1)
+
+model_df = model_df.drop(columns=[
+    "gdp_per_capita", "health_expenditure", "Year",
+    "IncomeGroup", "Region"
+])
+```
+
+### Train/Test Split
+
+We first drop the country column as it can't be a predictor, then split using a 70/30 ratio with random state of 370 for reproducibility. All models are trained on the train split and evaluated only on the held out test split. The dimensions of the splits are as follows:
+
+```{python}
+X = model_df.drop(columns=["life_expectancy", "Country"])
+y = model_df["life_expectancy"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.30, random_state=370
+)
+
+split_summary_tbl = pd.DataFrame({
+    "Split": ["X_train", "X_test", "y_train", "y_test"],
+    "Rows": [X_train.shape[0], X_test.shape[0], y_train.shape[0], y_test.shape[0]],
+    "Columns": [X_train.shape[1], X_test.shape[1], 1, 1]
+})
+
+split_summary_tbl
+```
+
+Table 3. Training and testing split dimensions.
+
+## Models
+
+### Preparations
+
+```{python}
+results = []
+model_predictions = {}
+
+def eval_model(model_name, y_true, y_pred):
+    metrics = {
+        "Model": model_name,
+        "R2": r2_score(y_true, y_pred),
+        "RMSE": np.sqrt(mean_squared_error(y_true, y_pred)),
+        "MAE": mean_absolute_error(y_true, y_pred),
+    }
+    results.append(metrics)
+    model_predictions[model_name] = y_pred
+    return metrics
+```
+
+### Model 1: Generalized Additive Model
+
+The generalized additive model estimates life expectancy as a sum of smooth effects from predictors. This allows nonlinear relationships while keeping the contribution of each feature interpretable.
+
+```{python}
+gam_model = LinearGAM().fit(X_train.values, y_train.values)
+gam_pred = gam_model.predict(X_test.values)
+gam_metrics = eval_model("GAM", y_test, gam_pred)
+```
+
+### Model 2: Random Forest
+
+Random Forest is an ensemble of decision trees fit on bootstrap samples with random feature selection at splits. We use a parameter grid to tune the hyperparameters, and the best setting is selected by cross validation.
+
+```{python}
+p = X_train.shape[1]
+rf_param_grid = {
+    "n_estimators": [300, 600],
+    "max_features": [p // 6, p // 4, p // 3],
+    "max_depth": [6, 10],
+    "min_samples_leaf": [2, 5],
+}
+
+rf_comb = [
+    (n_estimators, max_features, max_depth, min_samples_leaf)
+    for n_estimators in rf_param_grid["n_estimators"]
+    for max_features in rf_param_grid["max_features"]
+    for max_depth in rf_param_grid["max_depth"]
+    for min_samples_leaf in rf_param_grid["min_samples_leaf"]
+]
+
+def fit_rf_cv(n_est, max_feat, max_d, min_leaf):
+    rf = RandomForestRegressor(
+        n_estimators=n_est,
+        max_features=max_feat,
+        max_depth=max_d,
+        min_samples_leaf=min_leaf,
+        n_jobs=1,
+        random_state=370,
+    )
+    cv_scores = cross_val_score(
+        rf, X_train, y_train, cv=5,
+        scoring="neg_root_mean_squared_error", n_jobs=1
+    )
+    return {
+        "n_estimators": n_est,
+        "max_features": max_feat,
+        "max_depth": max_d,
+        "min_samples_leaf": min_leaf,
+        "cv_rmse": -cv_scores.mean(),
+    }
+
+rf_cv_results = pd.DataFrame([
+    fit_rf_cv(n_est, max_feat, max_d, min_leaf)
+    for n_est, max_feat, max_d, min_leaf in rf_comb
+]).sort_values("cv_rmse")
+
+best_rf = rf_cv_results.iloc[0]
+rf_model = RandomForestRegressor(
+    n_estimators=int(best_rf["n_estimators"]),
+    max_features=int(best_rf["max_features"]),
+    max_depth=int(best_rf["max_depth"]),
+    min_samples_leaf=int(best_rf["min_samples_leaf"]),
+    n_jobs=1,
+    random_state=370,
+)
+rf_model.fit(X_train, y_train)
+rf_pred = rf_model.predict(X_test)
+rf_metrics = eval_model("Random Forest", y_test, rf_pred)
+```
+
+### Model 3: XGBoost
+
+XGBoost is a boosted tree model that builds trees sequentially to try to reduce prior residual error. Similar to the random forest model, we use the parameter grid to tune the hyperparameters, and the best setting is also selected by cross validation.
+
+```{python}
+xgb_param_grid = {
+    "max_depth": [3, 4, 5],
+    "learning_rate": [0.02, 0.05, 0.1],
+    "n_estimators": [300, 500, 700],
+    "subsample": [0.7, 0.85, 1.0],
+}
+
+xgb_comb = [
+    (max_depth, learning_rate, n_estimators, subsample)
+    for max_depth in xgb_param_grid["max_depth"]
+    for learning_rate in xgb_param_grid["learning_rate"]
+    for n_estimators in xgb_param_grid["n_estimators"]
+    for subsample in xgb_param_grid["subsample"]
+]
+
+def fit_xgb_cv(max_d, lr, n_est, subs):
+    xgb = XGBRegressor(
+        max_depth=max_d,
+        learning_rate=lr,
+        n_estimators=n_est,
+        subsample=subs,
+        n_jobs=1,
+        random_state=370,
+        verbosity=0,
+    )
+    cv_scores = cross_val_score(
+        xgb, X_train, y_train, cv=5,
+        scoring="neg_root_mean_squared_error", n_jobs=1
+    )
+    return {
+        "max_depth": max_d,
+        "learning_rate": lr,
+        "n_estimators": n_est,
+        "subsample": subs,
+        "cv_rmse": -cv_scores.mean(),
+    }
+
+xgb_cv_results = pd.DataFrame([
+    fit_xgb_cv(max_d, lr, n_est, subs)
+    for max_d, lr, n_est, subs in xgb_comb
+]).sort_values("cv_rmse")
+
+best_xgb = xgb_cv_results.iloc[0]
+xgb_model = XGBRegressor(
+    max_depth=int(best_xgb["max_depth"]),
+    learning_rate=float(best_xgb["learning_rate"]),
+    n_estimators=int(best_xgb["n_estimators"]),
+    subsample=float(best_xgb["subsample"]),
+    n_jobs=1,
+    random_state=370,
+    verbosity=0,
+)
+xgb_model.fit(X_train, y_train)
+xgb_pred = xgb_model.predict(X_test)
+xgb_metrics = eval_model("XGBoost", y_test, xgb_pred)
+```
+
+# Results
+
+## Performance Table
+
+We adopt 3 metrics for model evaluation: R^2 shows the percentage of explained variance, RMSE shows squared errors, and MAE shows absolute error. Together, these statistics provide a balanced view of predictive accuracy of each model. Overall, the XGBoost model is the strongest with a high R^2 value. The exact metrics of the models are listed as follows:
+
+```{python}
+performance_df = (
+    pd.DataFrame(results)
+    .sort_values("RMSE")
+    .reset_index(drop=True)
+    .round(3)
+)
+performance_df
+```
+
+Table 4. Test-set model performance metrics.
+
+## Diagnostic Plots
+
+Scatter plots for observed values versus predicted values for each of the models:
+
+```{python}
+fig, axes = plt.subplots(3, 1, figsize=(6, 18))
+
+for i, (model_name, preds) in enumerate(model_predictions.items()):
+    ax = axes[i]
+    ax.scatter(y_test, preds, alpha=0.5)
+    min_val = min(y_test.min(), preds.min())
+    max_val = max(y_test.max(), preds.max())
+    ax.plot([min_val, max_val], [min_val, max_val], color="red", linestyle="--")
+    ax.set_title(f"Figure 4. {model_name}: Observed vs Predicted")
+    ax.set_xlabel("Observed life expectancy")
+    ax.set_ylabel("Predicted life expectancy")
+
+plt.tight_layout()
+plt.show()
+```
+
+From Figure 4, all models perform better when observed life expectancy is above 60, and the GAM is the worst performing model at prediction. Figure 4 also shows that the random forest model and the XGBoost model perform similarly, with XGBoost having a small edge based on test metrics.
+
+## Variable Importance
+
+Checking the importance of the variables are crucial as they help us figure out which variables are actually making an impact on life expectancy. Here we take the top 10 most important features from the two better preforming models: the random forest model and the XGBoost model, and compare them.
+
+### Random Forest
+
+```{python}
+rf_imp = pd.Series(rf_model.feature_importances_, index=X_train.columns).sort_values(ascending=False).head(10)
+rf_imp.iloc[::-1].plot.barh()
+plt.title("Figure 5a. Random Forest Top 10 Features")
+plt.xlabel("Importance")
+plt.tight_layout()
+plt.show()
+```
+
+### XGBoost
+
+```{python}
+xgb_imp = pd.Series(xgb_model.feature_importances_, index=X_train.columns).sort_values(ascending=False).head(10)
+xgb_imp.iloc[::-1].plot.barh()
+plt.title("Figure 5b. XGBoost Top 10 Features")
+plt.xlabel("Importance")
+plt.tight_layout()
+plt.show()
+```
+
+Feature importance results from both models are broadly consistent, as shown in Figure 5a and Figure 5b.
+
+In Figure 5a, the top predictors for Random Forest are fertility rate, region being Sub-Saharan Africa, and logged GDP per capita. In Figure 5b, the most influential features for XGBoost are region being Sub-Saharan Africa, fertility rate, and absolute health expenditure.
+
+The XGBoost model seems to put high emphasis on the region dummy variables, while the random forest model not as much. The overlapping variables are fertility rates, logged GDP per capita, absolute health expenditure, year, and region being Sub-Saharan Africa and Middle East and North Africa. Across both models, the overlap in highly ranked variables suggests that these predictors carry robust signal for explaining cross-country variation in life expectancy. 
+
+# Conclusions and Summary
+
+In this project, we analyzed global life expectancy patterns using socioeconomic, demographic, environmental, and regional variables. Across all models, tree-based approaches achieved the strongest predictive performance, with XGBoost performing best overall and Random Forest close behind. At a broader level, the findings reinforce a consistent global pattern: life expectancy is strongly tied to development conditions. Variables linked to income, fertility, and regional context repeatedly appeared as important predictors.
+
+Some limitations to be noted: Although the choice of variables is broad, it does not include all relevant factors that may influence life expectancy. Also, since some variables only has data pre-2020, we cannot model the potential impact of COVID on life expectancy. If the database are to be updated in the future, we could include a boolean variable indicating whether or not the observation is during the COVID period.
+
+Overall, the project provides evidence that global life expectancy differences are related to development, demographic structure, and regional context. Future work should apply country-grouped or time-based validation, incorporate additional variables if possible, and test robustness across alternative modeling choices to strengthen validity.
