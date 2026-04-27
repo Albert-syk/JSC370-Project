@@ -1,0 +1,12 @@
+project:
+  type: website
+  output-dir: "."
+
+website:
+  title: "JSC370 Final Project"
+  navbar:
+    left:
+      - text: "Report"
+        href: final_project.qmd
+      - text: "Download Report"
+        href: final_project.pdf
